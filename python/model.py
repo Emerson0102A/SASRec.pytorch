@@ -7,7 +7,7 @@ class PointWiseFeedForward(torch.nn.Module):
 
         super(PointWiseFeedForward, self).__init__()
 
-        self.conv1 = torch.nn.Conv1d(hidden_units, hidden_units, kernel_size=1)
+        self.conv1 = torch.nn.Conv1d(hidden_units, hidden_units, kernel_size=1) #out_channels, in_channels, kernel
         self.dropout1 = torch.nn.Dropout(p=dropout_rate)
         self.relu = torch.nn.ReLU()
         self.conv2 = torch.nn.Conv1d(hidden_units, hidden_units, kernel_size=1)
@@ -33,7 +33,7 @@ class SASRec(torch.nn.Module):
 
         # TODO: loss += args.l2_emb for regularizing embedding vectors during training
         # https://stackoverflow.com/questions/42704283/adding-l1-l2-regularization-in-pytorch
-        self.item_emb = torch.nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0)
+        self.item_emb = torch.nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0) #词表大小，向量维度
         self.pos_emb = torch.nn.Embedding(args.maxlen+1, args.hidden_units, padding_idx=0)
         self.emb_dropout = torch.nn.Dropout(p=args.dropout_rate)
 
@@ -62,7 +62,7 @@ class SASRec(torch.nn.Module):
             # self.pos_sigmoid = torch.nn.Sigmoid()
             # self.neg_sigmoid = torch.nn.Sigmoid()
 
-    def log2feats(self, log_seqs): # TODO: fp64 and int64 as default in python, trim?
+    def log2feats(self, log_seqs): # TODO: fp64 and int64 as default in python, trim? #log2feats用来将输入的用户行为序列转换为特征表示 logs(日志) to features
         seqs = self.item_emb(torch.LongTensor(log_seqs).to(self.dev))
         seqs *= self.item_emb.embedding_dim ** 0.5
         poss = np.tile(np.arange(1, log_seqs.shape[1] + 1), [log_seqs.shape[0], 1])
@@ -78,11 +78,11 @@ class SASRec(torch.nn.Module):
             seqs = torch.transpose(seqs, 0, 1)
             if self.norm_first:
                 x = self.attention_layernorms[i](seqs)
-                mha_outputs, _ = self.attention_layers[i](x, x, x,
-                                                attn_mask=attention_mask)
-                seqs = seqs + mha_outputs
+                mha_outputs, _ = self.attention_layers[i](x, x, x, #Q,K,V都为x，这就叫自注意力
+                                                attn_mask=attention_mask)#返回输出和注意力权重，因为不需要，所以用_忽略
+                seqs = seqs + mha_outputs# 残差连接
                 seqs = torch.transpose(seqs, 0, 1)
-                seqs = seqs + self.forward_layers[i](self.forward_layernorms[i](seqs))
+                seqs = seqs + self.forward_layers[i](self.forward_layernorms[i](seqs))# 残差连接
             else:
                 mha_outputs, _ = self.attention_layers[i](seqs, seqs, seqs,
                                                 attn_mask=attention_mask)
@@ -90,17 +90,17 @@ class SASRec(torch.nn.Module):
                 seqs = torch.transpose(seqs, 0, 1)
                 seqs = self.forward_layernorms[i](seqs + self.forward_layers[i](seqs))
 
-        log_feats = self.last_layernorm(seqs) # (U, T, C) -> (U, -1, C)
+        log_feats = self.last_layernorm(seqs) # (U, T, C) -> (U, -1, C) 
 
         return log_feats
 
-    def forward(self, user_ids, log_seqs, pos_seqs, neg_seqs): # for training        
+    def forward(self, user_ids, log_seqs, pos_seqs, neg_seqs): # for training #pos_seqs :正样本序列 neg_seqs:负样本序列   
         log_feats = self.log2feats(log_seqs) # user_ids hasn't been used yet
 
         pos_embs = self.item_emb(torch.LongTensor(pos_seqs).to(self.dev))
         neg_embs = self.item_emb(torch.LongTensor(neg_seqs).to(self.dev))
 
-        pos_logits = (log_feats * pos_embs).sum(dim=-1)
+        pos_logits = (log_feats * pos_embs).sum(dim=-1) # (U, T, C) * (U, T, C) -> (U, T)
         neg_logits = (log_feats * neg_embs).sum(dim=-1)
 
         # pos_pred = self.pos_sigmoid(pos_logits)
@@ -109,13 +109,13 @@ class SASRec(torch.nn.Module):
         return pos_logits, neg_logits # pos_pred, neg_pred
 
     def predict(self, user_ids, log_seqs, item_indices): # for inference
-        log_feats = self.log2feats(log_seqs) # user_ids hasn't been used yet
+        log_feats = self.log2feats(log_seqs) # (U, T, C)
 
-        final_feat = log_feats[:, -1, :] # only use last QKV classifier, a waste
+        final_feat = log_feats[:, -1, :] #(U, C) 最后一个时间步的特征表示
 
-        item_embs = self.item_emb(torch.LongTensor(item_indices).to(self.dev)) # (U, I, C)
+        item_embs = self.item_emb(torch.LongTensor(item_indices).to(self.dev)) # (U, I, C) ,item_indices为所有候选物品，通常为(U, I)
 
-        logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1)
+        logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1) # (U, I, C) * (U, C, 1) -> (U, I, 1) -> (U, I)，表示对物品的打分
 
         # preds = self.pos_sigmoid(logits) # rank same item list for different users
 
