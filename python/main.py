@@ -13,8 +13,10 @@ def str2bool(s):
     return s == 'true'
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', required=True)
-parser.add_argument('--train_dir', required=True)
+parser.add_argument('--config_path', default=None, type=str,
+                    help='Optional path to a key,value config file (one per line).')
+parser.add_argument('--dataset', default=None, type=str)
+parser.add_argument('--train_dir', default=None, type=str)
 parser.add_argument('--batch_size', default=128, type=int)
 parser.add_argument('--lr', default=0.001, type=float)
 parser.add_argument('--maxlen', default=200, type=int)
@@ -29,7 +31,49 @@ parser.add_argument('--inference_only', default=False, type=str2bool)
 parser.add_argument('--state_dict_path', default=None, type=str)
 parser.add_argument('--norm_first', action='store_true', default=False)
 
-args = parser.parse_args()
+known_args, remaining_argv = parser.parse_known_args()
+
+if known_args.config_path:
+    cfg_path = os.path.expanduser(known_args.config_path)
+    if not os.path.isfile(cfg_path):
+        raise FileNotFoundError(f"Config file not found: {cfg_path}")
+
+    with open(cfg_path, 'r') as cfg_file:
+        for raw_line in cfg_file:
+            line = raw_line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if ',' not in line:
+                raise ValueError(f"Invalid config line (expected key,value): {raw_line}")
+            key, value = [part.strip() for part in line.split(',', 1)]
+            if key == 'config_path':
+                continue
+            action = next((a for a in parser._actions if a.dest == key), None)
+            if action is None:
+                raise ValueError(f"Unknown config key: {key}")
+            if isinstance(action, argparse._StoreTrueAction):
+                parsed_value = str2bool(value.lower())
+            elif isinstance(action, argparse._StoreFalseAction):
+                parsed_value = not str2bool(value.lower())
+            elif action.type is not None:
+                if action.type is str2bool:
+                    parsed_value = action.type(value.lower())
+                else:
+                    parsed_value = action.type(value)
+            else:
+                parsed_value = value
+
+            if isinstance(parsed_value, str):
+                lowered = parsed_value.lower()
+                if lowered == 'none' or lowered == '':
+                    parsed_value = None
+            parser.set_defaults(**{key: parsed_value})
+
+args = parser.parse_args(remaining_argv)
+
+missing_required = [name for name in ['dataset', 'train_dir'] if getattr(args, name) in (None, '')]
+if missing_required:
+    parser.error('Missing required arguments: ' + ', '.join(f'--{arg}' for arg in missing_required))
 if not os.path.isdir(args.dataset + '_' + args.train_dir):
     os.makedirs(args.dataset + '_' + args.train_dir)
 with open(os.path.join(args.dataset + '_' + args.train_dir, 'args.txt'), 'w') as f:
